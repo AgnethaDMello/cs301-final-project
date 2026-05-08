@@ -8,37 +8,31 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-import io
+from sklearn.metrics import r2_score
 
 st.set_page_config(page_title="Data Analysis & Prediction App", layout="wide")
 st.title("Data Analysis and Prediction App")
 
 # session state
-if "df" not in st.session_state:
-    st.session_state.df = None
-if "pipeline" not in st.session_state:
-    st.session_state.pipeline = None
-if "r2" not in st.session_state:
-    st.session_state.r2 = None
-if "feature_order" not in st.session_state:
-    st.session_state.feature_order = None
-if "is_classifier" not in st.session_state:
-    st.session_state.is_classifier = True
-if "trained_target" not in st.session_state:
-    st.session_state.trained_target = None
-if "trained_num_cols" not in st.session_state:
-    st.session_state.trained_num_cols = []
-if "trained_cat_cols" not in st.session_state:
-    st.session_state.trained_cat_cols = []
+for key, default in {
+    "df": None,
+    "pipeline": None,
+    "r2": None,
+    "feature_order": None,
+    "trained_target": None,
+    "trained_num_cols": [],
+    "trained_cat_cols": [],
+    "is_classifier": True,
+    "prediction_result": None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # preprocessing
 def preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    """Mirror the notebook's preprocessing steps."""
-    # Drop ID / date columns if present
     drop_cols = [c for c in ["Date", "Product ID", "Store ID"] if c in df.columns]
     df = df.drop(columns=drop_cols)
-    # Drop columns with >50% missing
     df = df.loc[:, df.isnull().mean() <= 0.5]
     return df
 
@@ -49,28 +43,27 @@ st.subheader("Upload File")
 uploaded = st.file_uploader("Upload a CSV dataset", type=["csv"])
 
 if uploaded is not None:
-    raw = pd.read_csv(uploaded)
-    st.session_state.df = preprocess(raw)
-    st.session_state.pipeline = None
-    st.session_state.r2 = None
-    st.session_state.feature_order = None
-    st.session_state.trained_target = None
-    st.session_state.trained_num_cols = []
-    st.session_state.trained_cat_cols = []
-    st.success(f"Dataset loaded: {st.session_state.df.shape[0]} rows × {st.session_state.df.shape[1]} cols")
+    if st.session_state.df is None:
+        raw = pd.read_csv(uploaded)
+        st.session_state.df = preprocess(raw)
+        st.session_state.pipeline = None
+        st.session_state.r2 = None
+        st.session_state.feature_order = None
+        st.session_state.trained_target = None
+        st.session_state.trained_num_cols = []
+        st.session_state.trained_cat_cols = []
+        st.session_state.prediction_result = None
+        st.success(f"Dataset loaded: {st.session_state.df.shape[0]} rows")
 
-df = st.session_state.df
-
-if df is not None:
+if st.session_state.df is not None:
+    df = st.session_state.df
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
 
     # target selection
     st.markdown("---")
     st.subheader("Select Target")
-    col_left, col_right = st.columns([1, 3])
-    with col_left:
-        target = st.selectbox("Select Target:", options=num_cols)
+    target = st.selectbox("Select Target:", options=num_cols)
 
     # bar charts
     st.markdown("---")
@@ -80,26 +73,19 @@ if df is not None:
             options=cat_cols,
             horizontal=True,
         )
-
         chart_col1, chart_col2 = st.columns(2)
 
-        # Chart 1 – Average target by categorical variable
         with chart_col1:
             avg_df = df.groupby(selected_cat)[target].mean().reset_index()
             fig1 = px.bar(
-                avg_df,
-                x=selected_cat,
-                y=target,
+                avg_df, x=selected_cat, y=target,
                 title=f"Average {target} by {selected_cat}",
                 labels={target: f"{target} (average)"},
-                color=selected_cat,
-                text_auto=".3f",
-                template="simple_white",
+                color=selected_cat, text_auto=".3f", template="simple_white",
             )
             fig1.update_layout(title_x=0.5, showlegend=False)
             st.plotly_chart(fig1, use_container_width=True)
 
-        # Chart 2 – Correlation strength of numerical variables with target
         with chart_col2:
             other_num = [c for c in num_cols if c != target]
             if other_num:
@@ -107,12 +93,9 @@ if df is not None:
                 corr_df = corr_vals.reset_index()
                 corr_df.columns = ["Numerical Variables", "Correlation Strength (Absolute Value)"]
                 fig2 = px.bar(
-                    corr_df,
-                    x="Numerical Variables",
-                    y="Correlation Strength (Absolute Value)",
+                    corr_df, x="Numerical Variables", y="Correlation Strength (Absolute Value)",
                     title=f"Correlation Strength of Numerical Variables with {target}",
-                    text_auto=".2f",
-                    template="simple_white",
+                    text_auto=".2f", template="simple_white",
                     color_discrete_sequence=["#636EFA"],
                 )
                 fig2.update_layout(title_x=0.5)
@@ -125,21 +108,18 @@ if df is not None:
     all_features = [c for c in df.columns if c != target]
     selected_features = []
     cols_per_row = 6
-    feature_rows = [all_features[i : i + cols_per_row] for i in range(0, len(all_features), cols_per_row)]
-    for row in feature_rows:
-        cb_cols = st.columns(len(row))
-        for col, feat in zip(cb_cols, row):
-            checked = col.checkbox(feat, value=True, key=f"feat_{feat}")
-            if checked:
+    feature_rows = [all_features[i: i + cols_per_row] for i in range(0, len(all_features), cols_per_row)]
+    for feat_row in feature_rows:
+        cb_cols = st.columns(len(feat_row))
+        for cb_col, feat in zip(cb_cols, feat_row):
+            if cb_col.checkbox(feat, value=True, key=f"feat_{feat}"):
                 selected_features.append(feat)
 
-    train_btn = st.button("Train")
-
-    if train_btn:
+    if st.button("Train"):
         if len(selected_features) == 0:
             st.error("Please select at least one feature.")
         else:
-            with st.spinner("Training Decision Tree (with hyperparameter tuning)…"):
+            with st.spinner("Training Decision Tree (with hyperparameter tuning)..."):
                 X = df[selected_features]
                 y = df[target]
 
@@ -150,16 +130,13 @@ if df is not None:
                 sel_num = [c for c in selected_features if c in num_cols]
                 sel_cat = [c for c in selected_features if c in cat_cols]
 
-                num_transformer = SimpleImputer(strategy="mean")
-                cat_transformer = Pipeline([
-                    ("imputer", SimpleImputer(strategy="most_frequent")),
-                    ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
-                ])
-
                 preprocessor = ColumnTransformer(
                     transformers=[
-                        ("num", num_transformer, sel_num),
-                        ("cat", cat_transformer, sel_cat),
+                        ("num", SimpleImputer(strategy="mean"), sel_num),
+                        ("cat", Pipeline([
+                            ("imputer", SimpleImputer(strategy="most_frequent")),
+                            ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+                        ]), sel_cat),
                     ],
                     remainder="drop",
                 )
@@ -183,10 +160,7 @@ if df is not None:
                 grid_search.fit(X_train, y_train)
 
                 best = grid_search.best_estimator_
-                y_pred = best.predict(X_test)
-
-                from sklearn.metrics import r2_score
-                r2 = r2_score(y_test, y_pred)
+                r2 = r2_score(y_test, best.predict(X_test))
 
                 st.session_state.pipeline = best
                 st.session_state.r2 = r2
@@ -195,50 +169,57 @@ if df is not None:
                 st.session_state.trained_target = target
                 st.session_state.trained_num_cols = num_cols
                 st.session_state.trained_cat_cols = cat_cols
+                st.session_state.prediction_result = None
 
     if st.session_state.r2 is not None:
         st.write(f"The R2 score is: **{st.session_state.r2:.2f}**")
 
-    # prediction
-    st.markdown("---")
-    st.subheader("Predict")
+# prediction
+st.markdown("---")
+st.subheader("Predict")
 
-    if st.session_state.pipeline is not None:
-        feat_order = st.session_state.feature_order
-        pred_target = st.session_state.trained_target
-        pred_num_cols = st.session_state.trained_num_cols
-        pred_cat_cols = st.session_state.trained_cat_cols
-        placeholder = ", ".join(str(f) for f in feat_order)
-        hint = f"Enter values in order: {placeholder}"
+if st.session_state.pipeline is None:
+    st.info("Train a model first before making predictions.")
+else:
+    feat_order = st.session_state.feature_order
+    pred_target = st.session_state.trained_target
+    pred_num_cols = st.session_state.trained_num_cols
+    placeholder = ", ".join(str(f) for f in feat_order)
 
-        pred_col1, pred_col2, pred_col3 = st.columns([3, 1, 3])
-        with pred_col1:
-            user_input = st.text_input("Feature values (comma-separated):", placeholder=hint)
-        with pred_col2:
-            predict_btn = st.button("Predict")
-        with pred_col3:
-            if predict_btn:
-                if not user_input.strip():
-                    st.error("Please enter feature values.")
-                else:
-                    try:
-                        raw_vals = [v.strip() for v in user_input.split(",")]
-                        if len(raw_vals) != len(feat_order):
-                            st.error(
-                                f"Expected {len(feat_order)} values, got {len(raw_vals)}. "
-                                f"Required order: {placeholder}"
-                            )
-                        else:
-                            row = {}
-                            for feat, val in zip(feat_order, raw_vals):
-                                if feat in pred_num_cols:
-                                    row[feat] = float(val)
-                                else:
-                                    row[feat] = val
-                            input_df = pd.DataFrame([row])
-                            prediction = st.session_state.pipeline.predict(input_df)[0]
-                            st.success(f"Predicted {pred_target} is: **{prediction}**")
-                    except ValueError as e:
-                        st.error(f"Invalid input: {e}. Make sure numerical fields contain numbers.")
-    else:
-        st.info("Train a model first before making predictions.")
+    user_input = st.text_input(
+        "Feature values (comma-separated):",
+        placeholder=placeholder,
+        key="predict_input",
+    )
+
+    if st.button("Predict", key="predict_btn"):
+        if not user_input.strip():
+            st.session_state.prediction_result = ("error", "Please enter feature values.")
+        else:
+            raw_vals = [v.strip() for v in user_input.split(",")]
+            if len(raw_vals) != len(feat_order):
+                st.session_state.prediction_result = (
+                    "error",
+                    f"Expected {len(feat_order)} values, got {len(raw_vals)}. "
+                    f"Required order: {placeholder}",
+                )
+            else:
+                try:
+                    row = {}
+                    for feat, val in zip(feat_order, raw_vals):
+                        row[feat] = float(val) if feat in pred_num_cols else val
+                    prediction = st.session_state.pipeline.predict(pd.DataFrame([row]))[0]
+                    st.session_state.prediction_result = (
+                        "success", f"Predicted {pred_target} is: **{prediction}**"
+                    )
+                except ValueError as e:
+                    st.session_state.prediction_result = (
+                        "error", f"Invalid input: {e}. Make sure numerical fields contain numbers."
+                    )
+
+    if st.session_state.prediction_result is not None:
+        kind, msg = st.session_state.prediction_result
+        if kind == "success":
+            st.success(msg)
+        else:
+            st.error(msg)
