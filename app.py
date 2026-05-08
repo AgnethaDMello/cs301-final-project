@@ -24,18 +24,26 @@ if "feature_order" not in st.session_state:
     st.session_state.feature_order = None
 if "is_classifier" not in st.session_state:
     st.session_state.is_classifier = True
+if "trained_target" not in st.session_state:
+    st.session_state.trained_target = None
+if "trained_num_cols" not in st.session_state:
+    st.session_state.trained_num_cols = []
+if "trained_cat_cols" not in st.session_state:
+    st.session_state.trained_cat_cols = []
 
 
 # preprocessing
 def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     """Mirror the notebook's preprocessing steps."""
+    # Drop ID / date columns if present
     drop_cols = [c for c in ["Date", "Product ID", "Store ID"] if c in df.columns]
     df = df.drop(columns=drop_cols)
+    # Drop columns with >50% missing
     df = df.loc[:, df.isnull().mean() <= 0.5]
     return df
 
 
-# uploading files
+# upload files
 st.markdown("---")
 st.subheader("Upload File")
 uploaded = st.file_uploader("Upload a CSV dataset", type=["csv"])
@@ -46,6 +54,9 @@ if uploaded is not None:
     st.session_state.pipeline = None
     st.session_state.r2 = None
     st.session_state.feature_order = None
+    st.session_state.trained_target = None
+    st.session_state.trained_num_cols = []
+    st.session_state.trained_cat_cols = []
     st.success(f"Dataset loaded: {st.session_state.df.shape[0]} rows × {st.session_state.df.shape[1]} cols")
 
 df = st.session_state.df
@@ -181,6 +192,9 @@ if df is not None:
                 st.session_state.r2 = r2
                 st.session_state.is_classifier = is_classifier
                 st.session_state.feature_order = selected_features
+                st.session_state.trained_target = target
+                st.session_state.trained_num_cols = num_cols
+                st.session_state.trained_cat_cols = cat_cols
 
     if st.session_state.r2 is not None:
         st.write(f"The R2 score is: **{st.session_state.r2:.2f}**")
@@ -191,6 +205,9 @@ if df is not None:
 
     if st.session_state.pipeline is not None:
         feat_order = st.session_state.feature_order
+        pred_target = st.session_state.trained_target
+        pred_num_cols = st.session_state.trained_num_cols
+        pred_cat_cols = st.session_state.trained_cat_cols
         placeholder = ", ".join(str(f) for f in feat_order)
         hint = f"Enter values in order: {placeholder}"
 
@@ -214,13 +231,13 @@ if df is not None:
                         else:
                             row = {}
                             for feat, val in zip(feat_order, raw_vals):
-                                if feat in num_cols:
+                                if feat in pred_num_cols:
                                     row[feat] = float(val)
                                 else:
                                     row[feat] = val
                             input_df = pd.DataFrame([row])
                             prediction = st.session_state.pipeline.predict(input_df)[0]
-                            st.success(f"Predicted {target} is: **{prediction}**")
+                            st.success(f"Predicted {pred_target} is: **{prediction}**")
                     except ValueError as e:
                         st.error(f"Invalid input: {e}. Make sure numerical fields contain numbers.")
     else:
