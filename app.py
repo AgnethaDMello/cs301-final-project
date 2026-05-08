@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -22,6 +22,8 @@ if "r2" not in st.session_state:
     st.session_state.r2 = None
 if "feature_order" not in st.session_state:
     st.session_state.feature_order = None
+if "is_classifier" not in st.session_state:
+    st.session_state.is_classifier = True
 
 
 # preprocessing
@@ -33,7 +35,7 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# uploading file
+# uploading files
 st.markdown("---")
 st.subheader("Upload File")
 uploaded = st.file_uploader("Upload a CSV dataset", type=["csv"])
@@ -70,7 +72,7 @@ if df is not None:
 
         chart_col1, chart_col2 = st.columns(2)
 
-        # average target by categorical variable chart
+        # Chart 1 – Average target by categorical variable
         with chart_col1:
             avg_df = df.groupby(selected_cat)[target].mean().reset_index()
             fig1 = px.bar(
@@ -86,7 +88,7 @@ if df is not None:
             fig1.update_layout(title_x=0.5, showlegend=False)
             st.plotly_chart(fig1, use_container_width=True)
 
-        # correlation strength of numerical variables with target chart
+        # Chart 2 – Correlation strength of numerical variables with target
         with chart_col2:
             other_num = [c for c in num_cols if c != target]
             if other_num:
@@ -130,6 +132,10 @@ if df is not None:
                 X = df[selected_features]
                 y = df[target]
 
+                n_unique = y.nunique()
+                is_classifier = (n_unique <= 20) or (n_unique / len(y) < 0.05)
+                model_cls = DecisionTreeClassifier if is_classifier else DecisionTreeRegressor
+
                 sel_num = [c for c in selected_features if c in num_cols]
                 sel_cat = [c for c in selected_features if c in cat_cols]
 
@@ -149,7 +155,7 @@ if df is not None:
 
                 pipeline = Pipeline([
                     ("preprocessor", preprocessor),
-                    ("model", DecisionTreeClassifier()),
+                    ("model", model_cls()),
                 ])
 
                 param_grid = {
@@ -173,6 +179,7 @@ if df is not None:
 
                 st.session_state.pipeline = best
                 st.session_state.r2 = r2
+                st.session_state.is_classifier = is_classifier
                 st.session_state.feature_order = selected_features
 
     if st.session_state.r2 is not None:
