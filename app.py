@@ -156,7 +156,7 @@ if st.session_state.df is not None:
                     X, y, test_size=0.2, random_state=42
                 )
 
-                grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=-1)
+                grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=1)
                 grid_search.fit(X_train, y_train)
 
                 best = grid_search.best_estimator_
